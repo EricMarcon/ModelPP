@@ -1,0 +1,117 @@
+---
+title: "Programme de travail"
+author:
+  - name: Eric Marcon
+  - name: Stéphane Traissac
+  - name: Géraldine Derroire
+abstract: >
+  Programme du stage.
+date: "`r format(Sys.time(), '%d %B %Y')`"
+pdftoc: no
+preamble: >
+  \usepackage{textcomp}
+  \DeclareUnicodeCharacter{B0}{\textdegree}
+  \hyphenation{bio-di-ver-si-ty sap-lings}
+bibliography: references.bib
+lang: french # english
+always_allow_html: yes
+output:
+  bookdown::html_document2:
+    theme: sandstone
+    toc: yes
+    toc_float: yes
+  bookdown::gitbook:
+    config:
+      download: null
+  bookdown::word_document2: default
+  bookdown::pdf_book:
+    base_format: EcoFoG::memo
+    keep_tex: yes
+---
+
+```{r Options, echo=FALSE, message=FALSE}
+### knitr and R options (packages, ...)
+knitr::opts_chunk$set(echo = FALSE, tidy=TRUE, tidy.opts=list(blank=FALSE, width.cutoff=50), out.width='.8\\maxwidth', fig.align='center')
+options(width=50)
+# Installation des packages si nécessaire et chargement
+Library <- function(Packages) {
+  InstallAndLoad <- function(Package) {
+    if (!Package %in% installed.packages()[, 1]) {install.packages(Package, repos="https://cran.rstudio.com/")}
+    require(Package, character.only = TRUE)
+  }
+  invisible(sapply(Packages, InstallAndLoad))
+}
+# Ajouter les packages nécessaires ici
+Library(c("kableExtra"))
+```
+
+
+# Objectifs
+
+Explorer les techniques de modélisation de processus ponctuels récentes applicables aux données de Paracou pour comprendre l'étendue de leurs possibilités.
+
+# Programme
+
+## Apprentissage
+
+Techniques nécessaires :
+
+- R, Markdown, Git pour l'environnement de travail et la production de documents;
+
+- Inférence bayesienne;
+
+- Processus ponctuels : bases mathématiques [@Leininger2017], processus courants [notamment processus de Cox: @Illian2008, chapitre 6], statistiques non paramétriques [@Illian2008, section 4.3], enjeux en écologie forestière [@Law2009];
+
+- inlabru : formation sur le site. Présentation des méthodes dans "Tutorial/Slides" et le code est dans "Practicals".
+
+
+## Environnement de travail
+
+R, RStudio.
+Package INLA [^1] et inla-bru [^2].
+
+[^1]: <http://www.r-inla.org/>
+[^2]: <https://sites.google.com/inlabru.org/inlabru/>
+
+Package EcoFoG pour l'accès aux données de Paracou (ouverture d'un compte sur SQLServer nécessaire).
+
+```{r, eval=FALSE}
+# Installation des packages si nécessaire
+InstallPackages <- function(Packages) {
+  sapply(Packages, function(Package) if (!Package %in% installed.packages()[, 1]) {install.packages(Package)})
+}
+
+# Packages sur CRAN
+InstallPackages(c("devtools",   # Outils de développement. Importe remotes, etc.
+                  "tidyverse",  # Processus ponctuels
+                  "dbmss",      # Processus ponctuels (installe Spatstat, ...)
+                  "inla-bru"    # Modélisation des LGCPP. Ne fonctionne pas sans INLA
+                  ))
+
+# INLA
+install.packages("INLA", repos="https://inla.r-inla-download.org/R/testing")
+
+# Packages sur GitHub
+devtools::install_github("EcoFoG/EcoFoG")
+```
+
+
+
+## Progression
+
+Traiter une parcelle de Paracou. Acquérir les compétences au fur et à mesure.
+
+1. Toutes espèces confondues :
+
+    1. Modéliser un Poisson homogène avec inla-bru. Comparer avec le simple comptage des points.
+    2. Modéliser un Poisson inhomogène avec inla-bru (à partir des données environnementales). Comparer avec l'estimation de densité par spatstat.
+    3. Modéliser un Cox Log-Gaussien avec interactions spatiales, homogène (sans environnement). Comparer avec les informations données par la fonction K de Ripley.
+    4. Modéliser un Cox Log-Gaussien inhomogène. Comparer avec K inhomogène [@VanLieshout1996]].
+    5. Développer une procédure systématique de comparaison : simulation, inférence, comparaison.
+    
+2. Pour une espèce contre les autres, même approche, avec interactions intra et interspécifiques. Augmenter le nombre d'espèces (2 + grise, 3+ grise...) jusqu'à trouver la limite.
+    
+3. Discuter l'intérêt des méthodes.
+
+
+`r if (!knitr:::is_latex_output()) '# References {-}'`
