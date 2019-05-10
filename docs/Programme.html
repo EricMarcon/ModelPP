@@ -1593,9 +1593,28 @@ Programme du stage.
 </div>
 <div id="environnement-de-travail" class="section level2">
 <h2><span class="header-section-number">2.2</span> Environnement de travail</h2>
-<p>R, RStudio.
-Package INLA<a href="#fn1" class="footnote-ref" id="fnref1"><sup>1</sup></a> et inla-bru.<a href="#fn2" class="footnote-ref" id="fnref2"><sup>2</sup></a></p>
-<p>Package EcoFoG pour l’accès aux données de Paracou (ouverture d’un compte sur SQLServer nécessaire).</p>
+<p>Installer R<a href="#fn1" class="footnote-ref" id="fnref1"><sup>1</sup></a> et RStudio<a href="#fn2" class="footnote-ref" id="fnref2"><sup>2</sup></a>.</p>
+<p>Installer git[^3].
+[^3]: <a href="https://git-scm.com/" class="uri">https://git-scm.com/</a></p>
+<p>Les packages nécessaires (script suivant) sont INLA<a href="#fn3" class="footnote-ref" id="fnref3"><sup>3</sup></a> et inla-bru<a href="#fn4" class="footnote-ref" id="fnref4"><sup>4</sup></a>, et le package EcoFoG pour l’accès aux données de Paracou (ouverture d’un compte sur SQLServer nécessaire).</p>
+<pre class="r"><code># Installation des packages si nécessaire
+InstallPackages &lt;- function(Packages) {
+  sapply(Packages, function(Package) if (!Package %in% installed.packages()[, 1]) {install.packages(Package)})
+}
+
+# Packages sur CRAN
+InstallPackages(c(&quot;devtools&quot;,   # Outils de développement. Importe remotes, etc.
+                  &quot;tidyverse&quot;,  # Processus ponctuels
+                  &quot;dbmss&quot;,      # Processus ponctuels (installe Spatstat, ...)
+                  &quot;inla-bru&quot;    # Modélisation des LGCPP. Ne fonctionne pas sans INLA
+                  ))
+
+# INLA
+install.packages(&quot;INLA&quot;, repos=&quot;https://inla.r-inla-download.org/R/testing&quot;)
+
+# Packages sur GitHub
+devtools::install_github(&quot;EcoFoG/EcoFoG&quot;)</code></pre>
+<p>Créer un nouveau projet RStudio à partir du dépôt GitHub (New Project/ Version control/ Git/ Repository URL = <a href="https://github.com/EricMarcon/ModelPP.git" class="uri">https://github.com/EricMarcon/ModelPP.git</a>).</p>
 </div>
 <div id="progression" class="section level2">
 <h2><span class="header-section-number">2.3</span> Progression</h2>
@@ -1636,6 +1655,8 @@ Package INLA<a href="#fn1" class="footnote-ref" id="fnref1"><sup>1</sup></a> et 
 <ol>
 <li id="fn1"><p><a href="http://www.r-inla.org/" class="uri">http://www.r-inla.org/</a><a href="#fnref1" class="footnote-back">↩</a></p></li>
 <li id="fn2"><p><a href="https://sites.google.com/inlabru.org/inlabru/" class="uri">https://sites.google.com/inlabru.org/inlabru/</a><a href="#fnref2" class="footnote-back">↩</a></p></li>
+<li id="fn3"><p><a href="http://www.r-inla.org/" class="uri">http://www.r-inla.org/</a><a href="#fnref3" class="footnote-back">↩</a></p></li>
+<li id="fn4"><p><a href="https://sites.google.com/inlabru.org/inlabru/" class="uri">https://sites.google.com/inlabru.org/inlabru/</a><a href="#fnref4" class="footnote-back">↩</a></p></li>
 </ol>
 </div>
 

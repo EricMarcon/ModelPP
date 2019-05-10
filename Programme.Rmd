@@ -31,7 +31,7 @@ output:
 
 ```{r Options, echo=FALSE, message=FALSE}
 ### knitr and R options (packages, ...)
-knitr::opts_chunk$set(echo = FALSE, tidy=TRUE, tidy.opts=list(blank=FALSE, width.cutoff=50), out.width='.8\\maxwidth', fig.align='center')
+knitr::opts_chunk$set(echo = TRUE, tidy=TRUE, tidy.opts=list(blank=FALSE, width.cutoff=50), out.width='.8\\maxwidth', fig.align='center')
 options(width=50)
 # Installation des packages si nécessaire et chargement
 Library <- function(Packages) {
@@ -67,13 +67,18 @@ Techniques nécessaires :
 
 ## Environnement de travail
 
-R, RStudio.
-Package INLA [^1] et inla-bru [^2].
+Installer R[^1] et RStudio[^2].
+
+[^1]: <https://cran.r-project.org/>
+[^2]: <https://www.rstudio.com/products/rstudio/download/>
+
+Installer git[^3].
+[^3]: <https://git-scm.com/>
+
+Les packages nécessaires (script suivant) sont INLA[^1] et inla-bru[^2], et le package EcoFoG pour l'accès aux données de Paracou (ouverture d'un compte sur SQLServer nécessaire).
 
 [^1]: <http://www.r-inla.org/>
 [^2]: <https://sites.google.com/inlabru.org/inlabru/>
-
-Package EcoFoG pour l'accès aux données de Paracou (ouverture d'un compte sur SQLServer nécessaire).
 
 ```{r, eval=FALSE}
 # Installation des packages si nécessaire
@@ -94,6 +99,8 @@ install.packages("INLA", repos="https://inla.r-inla-download.org/R/testing")
 # Packages sur GitHub
 devtools::install_github("EcoFoG/EcoFoG")
 ```
+
+Créer un nouveau projet RStudio à partir du dépôt GitHub (New Project/ Version control/ Git/ Repository URL = https://github.com/EricMarcon/ModelPP.git).
 
 
 
