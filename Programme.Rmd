@@ -60,7 +60,7 @@ Techniques nécessaires :
 
 - Inférence bayesienne;
 
-- Processus ponctuels : bases mathématiques [@Leininger2017], processus courants [notamment processus de Cox: @Illian2008, chapitre 6], statistiques non paramétriques [@Illian2008, section 4.3], enjeux en écologie forestière [@Law2009];
+- Processus ponctuels : bases mathématiques [@Leininger2017], processus courants [notamment processus de Cox: @Illian2008, chapitre 6], statistiques non paramétriques [@Illian2008, section 4.3], enjeux en écologie forestière [@Condit2000; @Law2009];
 
 - inlabru : formation sur le site. Présentation des méthodes dans "Tutorial/Slides" et le code est dans "Practicals".
 
