@@ -1566,7 +1566,7 @@ div.tocify {
 <h4 class="author">Eric Marcon</h4>
 <h4 class="author">Stéphane Traissac</h4>
 <h4 class="author">Géraldine Derroire</h4>
-<h4 class="date">12 mai 2019</h4>
+<h4 class="date">14 mai 2019</h4>
 <div class="abstract">
 <p class="abstract">Abstract</p>
 Programme du stage.
@@ -1594,9 +1594,8 @@ Programme du stage.
 <div id="environnement-de-travail" class="section level2">
 <h2><span class="header-section-number">2.2</span> Environnement de travail</h2>
 <p>Installer R<a href="#fn1" class="footnote-ref" id="fnref1"><sup>1</sup></a> et RStudio<a href="#fn2" class="footnote-ref" id="fnref2"><sup>2</sup></a>.</p>
-<p>Installer git[^3].
-[^3]: <a href="https://git-scm.com/" class="uri">https://git-scm.com/</a></p>
-<p>Les packages nécessaires (script suivant) sont INLA<a href="#fn3" class="footnote-ref" id="fnref3"><sup>3</sup></a> et inla-bru<a href="#fn4" class="footnote-ref" id="fnref4"><sup>4</sup></a>, et le package EcoFoG pour l’accès aux données de Paracou (ouverture d’un compte sur SQLServer nécessaire).</p>
+<p>Installer git<a href="#fn3" class="footnote-ref" id="fnref3"><sup>3</sup></a>.</p>
+<p>Les packages nécessaires (script suivant) sont INLA<a href="#fn4" class="footnote-ref" id="fnref4"><sup>4</sup></a> et inla-bru<a href="#fn5" class="footnote-ref" id="fnref5"><sup>5</sup></a>, et le package EcoFoG pour l’accès aux données de Paracou (ouverture d’un compte sur SQLServer nécessaire).</p>
 <pre class="r"><code># Installation des packages si nécessaire
 InstallPackages &lt;- function(Packages) {
   sapply(Packages, function(Package) if (!Package %in% installed.packages()[, 1]) {install.packages(Package)})
@@ -1656,10 +1655,11 @@ devtools::install_github(&quot;EcoFoG/EcoFoG&quot;)</code></pre>
 <div class="footnotes">
 <hr />
 <ol>
-<li id="fn1"><p><a href="http://www.r-inla.org/" class="uri">http://www.r-inla.org/</a><a href="#fnref1" class="footnote-back">↩</a></p></li>
-<li id="fn2"><p><a href="https://sites.google.com/inlabru.org/inlabru/" class="uri">https://sites.google.com/inlabru.org/inlabru/</a><a href="#fnref2" class="footnote-back">↩</a></p></li>
-<li id="fn3"><p><a href="http://www.r-inla.org/" class="uri">http://www.r-inla.org/</a><a href="#fnref3" class="footnote-back">↩</a></p></li>
-<li id="fn4"><p><a href="https://sites.google.com/inlabru.org/inlabru/" class="uri">https://sites.google.com/inlabru.org/inlabru/</a><a href="#fnref4" class="footnote-back">↩</a></p></li>
+<li id="fn1"><p><a href="https://cran.r-project.org/" class="uri">https://cran.r-project.org/</a><a href="#fnref1" class="footnote-back">↩</a></p></li>
+<li id="fn2"><p><a href="https://www.rstudio.com/products/rstudio/download/" class="uri">https://www.rstudio.com/products/rstudio/download/</a><a href="#fnref2" class="footnote-back">↩</a></p></li>
+<li id="fn3"><p><a href="https://git-scm.com/" class="uri">https://git-scm.com/</a><a href="#fnref3" class="footnote-back">↩</a></p></li>
+<li id="fn4"><p><a href="http://www.r-inla.org/" class="uri">http://www.r-inla.org/</a><a href="#fnref4" class="footnote-back">↩</a></p></li>
+<li id="fn5"><p><a href="https://sites.google.com/inlabru.org/inlabru/" class="uri">https://sites.google.com/inlabru.org/inlabru/</a><a href="#fnref5" class="footnote-back">↩</a></p></li>
 </ol>
 </div>
 
