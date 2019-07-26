@@ -1,0 +1,805 @@
+---
+title: "Code du Stage : Modélisation de la forêt tropicale par les processus ponctuels"
+author: "Léna Klay"
+date: "19 juillet 2019"
+output: pdf_document
+---
+
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+
+# Librairies, données, fonctions et objets de base...
+
+
+## Librairies
+
+```{r library}
+rm(list=objects())
+graphics.off()
+
+library(INLA)
+library(inlabru)
+library(sp)
+library(spatstat)
+library(ggplot2)
+library(raster)       # raster altitude
+library(numbers)      # fonction mod
+library(viridis)      # couleurs graphique altitude
+library(gstat)        # krigeage
+library(dbmss)        # fonction Mhat
+```
+
+
+
+## Chargement des données
+
+Les données fournies sont celles de la parcelle 16 de Paracou (année 2015) auxquelles j'ai rajouté 3 variables.
+
+- X et Y : les coordonnées sur la parcelle, avec pour origine le coin Sud-Ouest et pour axes les côtés Sud et Ouest du carré,
+- altitude : l'altitude du terrain à l'emplacement de l'arbre.
+
+J'ai également supprimé les arbres qui sortaient de la parcelle. Pour plus de précisions concernant la construction de ces données, voir le fichier "preparation_donnees_paracou.R".
+
+
+```{r}
+load("data/p16_avec coord_et_altitude_2015.RData")
+```
+
+
+
+
+## Fonction de préparation des données
+
+Cette fonction crée à partir des coordonnées x et y du semis de points, tous les objets dont nous aurons besoin pour notre étude. Elle retourne le nombre d'observations (nb_obs), un SpatialPointsDataFrame de coordonnées (coord_pts), un objet ppp des coordonnées (coord_pts_ppp), un DataFrame des coordonnées (df) et un mesh (mesh) adapté aux coordonnées. 
+
+L'argument data doit être composé de deux colonnes nommées x et y.
+L'argument mesh = TRUE par défaut.
+L'argument size spécifie la taille d'un côté du domaine (par défaut = 5), et donc les valeurs max. des coordonnées entrées en argument (deux valeurs utilisées : 5 ou 500). 
+
+
+Sûrement du à un problème d'implémentation, nous ne sommes pas en mesure de construire un maillage régulier sur des données allant de 0 à 500 (valeurs trop élevées qui engendre un temps de calcul démesurément long). L'argument size fixé à une valeur de 500 servira donc uniquement à tracer certains graphiques en taille réelle ; si size = 500, la fonction ne produira jamais de maillage. La solution provisoire trouvée pour nos études est de considérer un domaine de taille 5x5, et de diviser les coordonnées des arbres de la parcelle par 100.
+
+```{r}
+preparation = function(data, mesh = TRUE, size = 5){
+  
+sortie = list()
+  
+# spatialPointDataFrame  
+coord_pts = data.frame(data)                   
+sortie$nb_obs = nrow(coord_pts)
+coordinates(coord_pts) = c("x", "y")           
+sortie$coord_pts = coord_pts
+
+# dataframe pour les graphiques 
+sortie$df = data.frame(data)
+
+# création de d'objet ppp point pattern à partir des coordonnées
+sortie$coord_pts_ppp = ppp(coord_pts$x, coord_pts$y, c(0,size), c(0,size))
+
+
+if(size==5)
+{  if(mesh==TRUE)
+  {   # mesh apadté aux données
+      bnd = spoly(data.frame(lon =  c(0, 5, 5, 0, 0), lat = c(0, 0, 5, 5, 0))) 
+      boundary <- list(as.inla.mesh.segment(bnd), NULL)
+      mesh.loc <- coord_pts
+      mesh <- inla.mesh.2d(loc=mesh.loc,
+                     boundary=boundary,
+                     max.edge=c(0.2, 0.74),
+                     min.angle=c(30, 21),
+                     max.n=c(48000, 16000),
+                     max.n.strict=c(128000, 128000), 
+                     cutoff=0.008,
+                     offset=c(0.16, 0.43))
+      sortie$mesh = mesh
+  }
+}
+
+return(sortie)}
+```
+
+
+
+
+## Mesh régulier, frontières et graph
+
+Comme expliqué précedemment, les maillages réguliers sur des domaines dont les côtés dépassent 50 sont extrêmement longs à construire, même avec des exigences de qualité très faibles... La solution provisoire que nous allons donc adopter pour ces études est d'effectuer notre analyse sur un domaine de taille 5X5 et de diviser les coordonnées de chaque arbre par 100.
+
+```{r}
+# frontière du domaine 5x5 (sens inverse des aiguilles d'une montre)
+bnd = spoly(data.frame(lon =  c(0, 5, 5, 0, 0), lat = c(0, 0, 5, 5, 0)))  
+
+# même frontière en objet owin
+bnd_owin = owin(xrange=c(0,5), yrange=c(0,5))
+
+# mesh régulier sur le domaine 5x5
+mesh_r = inla.mesh.2d(boundary=bnd, max.edge = 0.2) 
+ggplot() + gg(mesh_r) + coord_fixed() + ggtitle("Mesh régulier")
+
+# grille utilisée pour les prédictions sur le domaine
+pix = pixels(mesh_r, nx = 200, ny = 200)   
+
+# coordonnées des noeuds de cette grille dans un dataframe
+pix_df = as.data.frame(pix)
+
+
+# fonction qui définit le min et le max de l'échelle de couleurs pour l'affichage
+colsc <- function(max, min=0) {scale_fill_gradientn(colours = rev(RColorBrewer::brewer.pal(11,"RdYlBu")), limits = range(c(min, max), na.rm=TRUE))}
+```
+
+
+
+
+# Approche systématique
+
+Nous allons tester nos régressions sur des processus dont nous connaissons les paramètres. Cette approche nous permettra d'évaluer la qualité et la fonctionnalité de nos méthodes.
+
+
+## Poisson homogène
+
+Pour effectuer une régression de Poisson homogène, la fonction bru se base sur une grille arbitraire couvrant l'ensemble du domaine. Elle prend comme argument un SpatialPointsDataFrame contenant (pour coordonnées) les centres des cellules de cette grille et (pour valeur) le nombre de points du semis contenus dans chaque cellule correspondante. Il nous faut donc au préalable construire cette grille et son DataFrame.
+
+```{r}
+
+# Simulation
+poish = preparation(rpoispp(lambda = 10, win=bnd_owin), mesh = FALSE)
+
+
+# Grille pour la régression de poisson
+nb_carres_par_cote = 10                                                # résolution de la grille (arbitraire)
+grid = raster(xmn=0, ymn=0, xmx=5, ymx=5, res=5/nb_carres_par_cote)    # création de la grille sur le domaine
+grid[] = 0                                                             # grid[] : nombre d'observations dans chaque cellule
+
+tab = table(cellFromXY(grid, poish$coord_pts))                # compte pour chaque cellule de la grille, le nombre d'observations  
+grid[as.numeric(names(tab))] = tab                            # qu'elle contient,
+count_df = data.frame(coordinates(grid), count=grid[])        # ce résultat est ensuite stocké dans la variable count 
+coordinates(count_df) <- c("x", "y")                          # conversion en SpatialPointsDataFrame
+  
+
+# Régression
+fit_poish = bru(count ~ Intercept, count_df, family="poisson")
+lambda_poish = predict(fit_poish, pix, ~ exp(Intercept))
+lambda_poish_df = as.data.frame(lambda_poish)                 # Pour chaque point de pix en ligne, on a la loi du lambda associé.
+lambda_poish_df$intensity = lambda_poish$mean*(nb_carres_par_cote**2/25)          # Renormalisation pour avoir l'intensité, au lieu 
+                                                                                  # du nombre de points par cellule de la grille.
+
+# Plot
+ggplot() + gg(poish$coord_pts) + gg(bnd) + coord_fixed()
+plot(grid); points(poish$coord_pts, pch=20)
+
+# Valeurs
+print(paste("Intensité théorique 10")) 
+print(paste("Intensité observée", poish$nb_obs/25))             
+print(paste("Intensité poisson homogène", exp(fit_poish$summary.fixed$mean)*(nb_carres_par_cote**2/25) ))
+summary(fit_poish)
+```
+
+
+## Poisson non-homogène
+
+Nous souhaitons générer un processus non-homogène sur notre domaine. Poour cela nous choisissons arbitrairement comme intensité théorique sur le champ, la fonction qui somme les coordonées.
+
+```{r}
+
+# Intensité théorique
+intensity_pois = function(x,y){x+y}   
+grille = expand.grid(x=seq(0,5,length=200), y=seq(0,5,length=200))
+grille$intensity = grille$x + grille$y
+
+
+# Simulation
+pois = preparation(rpoispp(lambda = intensity_pois, win=bnd_owin))
+
+# Intensité observée
+densi = density(pois$coord_pts_ppp, sigma=bw.diggle(pois$coord_pts_ppp))
+
+
+# Echelle de couleurs commune
+intensity_max <- ceiling(max(max(densi), max(grille$intensity)))
+col_fixe <- colourmap(hcl.colors(intensity_max), breaks=0:intensity_max)
+
+# Plot
+ggplot() + gg(pois$coord_pts) + gg(bnd) + coord_fixed()
+mat_pois = matrix(grille$intensity, ncol=200, nrow=200, byrow = TRUE)
+plot(im(mat_pois, xcol=seq(ncol(mat_pois)), yrow=seq(nrow(mat_pois))), main="Intensité theorique", col=col_fixe)
+plot(densi, main="Intensité observée", col=col_fixe)
+
+```
+
+## Cox homogène
+
+Nous simulons ci-dessous un processus de Cox homogène muni d'une fonction de covariance de Matern, dont les paramètres sont $moy. = 10$, $var. = \exp(0.2)$, $\alpha=1/2$ et $\nu=1$.
+
+```{r}
+# Simulation
+lgcph = rLGCP(model='matern', mu = log(10), var=0.2, scale=1/2, nu=1, win=bnd_owin)
+coxh = preparation(data.frame(x = lgcph$y, y = lgcph$x))                 
+
+
+# lambda_theo est l'intensité exacte de notre processus et c'est une réalisation du champ aléatoire théorique de moyenne 10
+lambda_theoh <- attr(lgcph, 'Lambda')
+lambda_theoh_df = data.frame(expand.grid(x = lambda_theoh$yrow, y = lambda_theoh$xcol), val=as.vector(lambda_theoh$v))
+
+
+# Régression
+fit_coxh = lgcp(coordinates ~ Intercept, coxh$coord_pts, samplers = bnd)
+
+# Plot
+ggplot() + gg(coxh$coord_pts) + gg(bnd) + coord_fixed()
+ggplot(lambda_theoh_df, aes(x=x, y=y)) + geom_raster(aes(fill = val, interpolate=TRUE)) + coord_fixed() + colsc(max(lambda_theoh_df$val)) + gg(coxh$coord_pts) + ggtitle(label = "Lambda théorique")
+
+
+# Valeurs 
+print(paste("Intensité théorique 10"))  
+print(paste("Intensité observée", coxh$nb_obs/25))             
+print(paste("Intensité cox homogène", exp(fit_coxh$summary.fixed$mean)))
+summary(fit_coxh)
+```
+
+
+
+
+
+## Cox non-homogène
+
+## Sur un processus de Cox non-homogène
+
+Cette fois, nous simulons un processus de Cox non-homogène dont la moyenne n'est alors plus constante (nous choisissons la fonction damier de densité 5 et 20). Le processus est toujours muni d'une fonction de covariance de Matern dont les paramètres sont $var. = \exp(0.2)$, $\alpha=1/2$ et $\nu=1$.
+
+Afin d'effectuer la régression de Cox non-homogène, nous devons définir une variable de type champ aléatoire qui représentera les interactions intra-spécifique et nous permettra d'expliquer l'intensité. Le package INLA apporte une solution inattendue pour cette variable ; ce champ peut en effet être nommé comme on le souhaite et est reconnu seulement grâce à ces arguments (map = ...., model = ....). Cette fonction est appelée "f" est dans la documentation R. Dans les exemples ci-dessous elle sera appelée "field". Nous définissons "field" comme un champ aléatoire de covariance de Matérn, nous définissons donc un sous-modèle avec les paramètres du champ comme inconnus grâce à la fonction inla.spde2.pcmatern.
+
+
+```{r}
+      
+# Intensité exacte
+fct_damier = function(x,y){n = length(x); return(log(5+15*(mod(floor(x)+floor(y), rep(2,n)))))}
+grille = expand.grid(x=seq(0,5,length=200), y=seq(0,5,length=200))
+grille$intensity = exp(fct_damier(grille$x, grille$y))
+
+# Simulation
+lgcp_sim = rLGCP(model='matern', mu=fct_damier, var=0.2, scale=1/2, nu=1, win=bnd_owin)
+cox = preparation(data.frame(x = lgcp_sim$y, y = lgcp_sim$x))
+
+# lambda_theo est l'intensité exacte de notre processus et c'est une réalisation du champ aléatoire théorique de moyenne 10
+lambda_theo <- attr(lgcp_sim, 'Lambda')
+lambda_theo_df = data.frame(expand.grid(x = lambda_theo$yrow, y = lambda_theo$xcol), val=as.vector(lambda_theo$v))
+
+# Régression
+model_matern = inla.spde2.pcmatern(cox$mesh, prior.sigma = c(0.1, 0.01), prior.range = c(5, 0.01))
+fit_cox = lgcp(coordinates ~ field(map = coordinates, model = model_matern) + Intercept, cox$coord_pts, samplers = bnd)
+lambda_cox = predict(fit_cox, pix, ~ exp(field + Intercept))
+lambda_cox_df = as.data.frame(lambda_cox)
+
+
+
+
+# Plot
+ggplot() + gg(cox$coord_pts) + gg(bnd) + coord_fixed()
+
+ggplot(grille, aes(x=x, y=y)) + geom_raster(aes(fill = intensity, interpolate=TRUE)) + coord_fixed() +  colsc(max = max(lambda_theo_df$val)) + ggtitle(label = "Intensité théorique")
+
+ggplot(lambda_theo_df, aes(x=x, y=y)) + geom_raster(aes(fill = val, interpolate=TRUE)) + coord_fixed() + colsc(max = max(lambda_theo_df$val)) + gg(cox$coord_pts) + ggtitle(label = "Intensité de la réalisation du champ")
+
+plot(density(cox$coord_pts_ppp, sigma = bw.diggle(cox$coord_pts_ppp)), main="Intensité observée")  
+
+mat_cox = matrix(lambda_cox_df$mean, ncol=200, nrow=200, byrow = TRUE)
+plot(im(mat_cox, xcol=seq(ncol(mat_cox)), yrow=seq(nrow(mat_cox))), main="Intensité moyenne") 
+
+mat_cox = matrix(lambda_cox_df$sd, ncol=200, nrow=200, byrow = TRUE)
+plot(im(mat_cox, xcol=seq(ncol(mat_cox)), yrow=seq(nrow(mat_cox))), main="Ecart-type") 
+
+summary(fit_cox)
+```
+
+
+
+
+## Sur un processus de Matérn
+
+La fonction qui simule un processus de Matérn est rMatClust(kappa, scale, mu, win, .... ) de spatstat avec :
+
+kappa = intensité du premier processus de poisson (celui qui génère les centres des cercles)
+scale = rayon des cercles
+mu = nombre de points moyen par cercle
+win = fenêtre globale
+
+```{r}
+# Simulation
+matern = rMatClust(kappa=0.3, scale=0.4, mu=20, win = bnd_owin)
+mat = preparation(data.frame(x = matern$x, y = matern$y))                 
+
+# Régression
+model_matern = inla.spde2.pcmatern(mat$mesh, prior.sigma = c(0.1, 0.01), prior.range = c(5, 0.01))
+fit_mat = lgcp(coordinates ~ field(map = coordinates, model = model_matern) + Intercept, mat$coord_pts, samplers = bnd)
+lambda_mat = predict(fit_mat, pix, ~ exp(field + Intercept))
+lambda_mat_df = as.data.frame(lambda_mat)
+
+
+# Plot
+ggplot() + gg(mat$coord_pts) + gg(bnd) + coord_fixed()
+
+plot(density(mat$coord_pts_ppp, sigma = bw.diggle(mat$coord_pts_ppp)), main="Intensité observée")  
+mat_mat = matrix(lambda_mat_df$mean, ncol=200, nrow=200, byrow = TRUE)
+plot(im(mat_mat, xcol=seq(ncol(mat_mat)), yrow=seq(nrow(mat_mat))), main="Intensité moyenne") 
+
+mat_sd = matrix(lambda_mat_df$sd, ncol=200, nrow=200, byrow = TRUE)
+plot(im(mat_sd, xcol=seq(ncol(mat_sd)), yrow=seq(nrow(mat_sd))), main="Ecart-type")     
+
+summary(fit_mat)
+```
+
+
+# Altitude 
+
+Les données d'altitude dont nous disposons sont les altitudes au pied de chaque arbre de la parcelle.
+
+## Représentation de l'altitude
+
+```{r}
+# Altitude pour tous les arbres
+altitude = data.frame(x=p16$X,y=p16$Y,z=p16$altitude)
+coordinates(altitude)=c("x","y")
+ggplot(p16, aes(x=X, y=Y)) + geom_point(aes(color = altitude)) + scale_color_viridis(option="D") + coord_fixed() + ggtitle("Altitude exacte pour tous les arbres")
+
+
+# Altitude sur un échantillon d'arbres dans la parcelle (nécessaire à la rapidité du krigeage)
+diviseur = 10           
+sample_p16 = p16[sample(1:nrow(p16), floor(nrow(p16)/diviseur)),]
+ggplot(sample_p16, aes(x=X, y=Y)) + geom_point(aes(color = altitude)) + scale_color_viridis(option="D") + coord_fixed() + ggtitle("Altitude exacte sur un échantillon des arbres")
+
+
+# Visualisation sur la carte
+library(rgdal)
+library(leaflet)
+library(mapview)
+
+coord_utm = data.frame(long=p16$Xutm, lat=p16$Yutm)
+utms = SpatialPoints(coord_utm, proj4string=CRS('+proj=utm +zone=22'))
+longlats <- spTransform(utms, CRS('+init=epsg:4326'))
+longlats$alt = p16$altitude
+mapview(longlats, zcol = c("alt"), legend = TRUE)
+```
+
+
+
+
+## Ajout de l'altitude au modèle (régression sur les données de Paracou)
+
+(Attention ici : passage du carré de 500x500 au carré de 5x5)
+
+
+Nous souhaitons rajouter l'altitude comme variable du modèle ; non pas comme un champ aléatoire mais comme un champ fixé. La syntaxe est donc légèrement différente, la fonction "f" (qu'on nommera ici "alti" comme altitude) prendra en argument model = "linear". 
+
+Toujours dans cette même fonction, l'argument map est cette fois défini comme une seconde fonction qui retourne l'altitude à chaque coordonnée des points considérés. Cette seconde fonction nécessite un SpatialPixelsDataFrame de l'altitude, c'est à dire des valeurs d'altitude placées sur une grille régulière, ce qui n'est actuellement pas le cas puisque nos données correspondent à l'emplacement de chaque arbre. Nous devons donc effectuer au préalable un krigeage, détaillé ci-dessous.
+
+Attention : si vous obtenez une erreur de type "Error in match.names(clabs, names(xi)) : names do not match previous names", essayez de changer le nom de la fonction "f"... tous les noms ne sont pas acceptés et les messages d'erreur ne sont pas très clairs. 
+
+
+```{r}
+
+# Préparation des données
+altitude = SpatialPointsDataFrame(coords = data.frame(x=p16$X/100,y=p16$Y/100), 
+                                  data = data.frame(z=p16$altitude), proj4string = CRS(as.character(NA)))
+sample_altitude =  SpatialPointsDataFrame(coords = data.frame(x=sample_p16$X/100,y=sample_p16$Y/100), 
+                                          data = data.frame(z=sample_p16$altitude), proj4string = CRS(as.character(NA)))
+
+sample_altitude <- sample_altitude[-zerodist(sample_altitude)[,1],]          # enlève les points de même coordonnées  
+
+
+# Krigeage
+vgmEmpirique <- gstat::variogram(z ~ 1, data = sample_altitude)    
+vgmX <- fit.variogram(vgmEmpirique, vgm("Gau"))                              # Ajustement d'un modèle gaussien 
+geoX <- gstat(formula = z ~ 1, locations = sample_altitude, model = vgmX)    # Objet geostat qui décrit toutes les                                                                                               # caractéristiques de la modélisation.
+
+grid <- expand.grid((0:100)/20, (0:100)/20)         # Krigeage sur une grille de résolution 5cm (carré de 5m x 5m).
+names(grid) <- c("x", "y")
+gridded(grid) <- ~x + y
+altitude_grid <- predict(geoX, newdata = grid)      # Calcul de la valeur de l'altitude sur les points de la grille       
+altitude_grid=altitude_grid[,-2]
+names(altitude_grid) = c("z")
+
+
+# Plot
+image(altitude_grid, col = topo.colors(20, alpha = 1), asp = 1)
+contour(altitude_grid, add = TRUE)
+title(main = "Krigeage de l'altitude", font.main = 4)
+```
+Seconde fonction qui retourne l'altitude des points étudiés
+
+```{r}
+fct_alt <- function(x,y) {                                    # /!\ altitude_grid DOIT ABSOLUMENT être un SpatialPixelsDataFrame
+  
+  spp <- SpatialPoints(data.frame(x=x,y=y))                   # SpatialPoint object
+  proj4string(spp) <- CRS(proj4string(altitude_grid))         # auquel on attache le système de coordonnées de l'objet altitude_grid
+  v <- over(spp, altitude_grid)                               # extrait l'altitude correspondante aux coordonnées des points
+  v[is.na(v)] <- 0                                            # enlève les NA
+  return(v$z)
+} 
+```
+
+
+Nous testons ensuite notre modèle comprenant l'altitude sur quelques espèces d'arbres. 
+
+### Vouacapoua americana
+
+```{r}
+
+# Choix de l'espèce et du genre 
+genre = "Vouacapoua"
+espece = "americana"
+
+# Préparation des données
+voam = preparation(data.frame(x = p16$X[p16$Genus==genre&p16$Species==espece]/100, y = p16$Y[p16$Genus==genre&p16$Species==espece]/100))
+
+
+
+# Altitude seule 
+fit_alt_voam = lgcp(coordinates ~ alti(map = fct_alt(x,y), model = "linear") + Intercept, data = voam$coord_pts, samplers = bnd)
+lambda_alt_voam <- predict(fit_alt_voam, pix, ~ exp(alti + Intercept))
+
+# Champ SPDE seul
+model_matern = inla.spde2.pcmatern(voam$mesh, prior.sigma = c(0.1, 0.01), prior.range = c(5, 0.01))
+fit_spde_voam = lgcp(coordinates ~ field(map = coordinates, model = model_matern) + Intercept, data = voam$coord_pts, samplers = bnd)
+lambda_spde_voam <- predict(fit_spde_voam, pix, ~ exp(field + Intercept))
+
+# Altitude + champ SPDE
+model_matern = inla.spde2.pcmatern(voam$mesh, prior.sigma = c(0.1, 0.01), prior.range = c(5, 0.01))
+fit_alt_spde_voam = lgcp(coordinates ~  field(map = coordinates, model = model_matern) + alti(map = fct_alt(x,y), model = "linear") + Intercept, data = voam$coord_pts, samplers = bnd)
+lambda_alt_spde_voam <- predict(fit_alt_spde_voam, pix, ~ exp(field + alti + Intercept))
+lambda_alt_spde_voam_df = as.data.frame(lambda_alt_spde_voam)
+
+
+
+
+# Plot
+
+# Semis de points
+ggplot() + gg(voam$coord_pts) + gg(bnd) + coord_fixed()
+
+# Points avec altitude
+abc = data.frame(a=p16$X[p16$Genus==genre&p16$Species==espece]/100,b=p16$Y[p16$Genus==genre&p16$Species==espece]/100,c=p16$altitude[p16$Genus==genre&p16$Species==espece])
+ggplot(abc, aes(x=a, y=b)) + geom_point(aes(color = c)) + scale_color_viridis(option="D") + coord_fixed() + ggtitle(paste(genre, espece))
+
+# Intensité moyenne prédite des 3 modèles
+max_voam = max(max(lambda_alt_voam$mean),max(lambda_spde_voam$mean),max(lambda_alt_spde_voam$mean))  # Max. échelle de couleurs
+ggplot() + gg(lambda_alt_voam) + gg(bnd) + gg(voam$coord_pts, shape="+") + coord_equal() + ggtitle("Altitude") + colsc(max_voam)
+ggplot() + gg(lambda_spde_voam) + gg(bnd) + gg(voam$coord_pts, shape="+") + coord_equal() + ggtitle("SPDE") + colsc(max_voam)
+ggplot() + gg(lambda_alt_spde_voam) + gg(bnd) + gg(voam$coord_pts, shape="+") + coord_equal() + ggtitle("Altitude + SPDE") + colsc(max_voam)
+
+
+# Critères WAIC et DIC
+
+scores <- data.frame(
+  dic=c(alt = fit_alt$waic$waic, spde = fit_spde$waic$waic, alt_spde = fit_alt_spde$waic$waic),
+  waic=c(alt = fit_alt$dic$dic, spde = fit_spde$dic$dic, alt_spde = fit_alt_spde$dic$dic))
+rownames(scores) <- c("altitude", "field", "altitude + field")
+scores
+
+
+#summary(fit_spde_voam)
+#summary(fit_alt_voam)
+#summary(fit_alt_spde_voam)
+```
+
+Etude approfondie du modèle field + altitude dans le cas de Vouacapoua americana :
+```{r}
+# Intensité observée avec density
+densi = density(voam$coord_pts_ppp, sigma = bw.diggle(voam$coord_pts_ppp))
+densi$v[densi$v<0]=0
+
+# Intensité moyenne prédite
+mat_int = matrix(lambda_alt_spde_voam_df$mean, ncol=200, nrow=200, byrow = TRUE)
+
+# Ecart-type de la prédiction
+mat_eca = matrix(lambda_alt_spde_voam_df$sd, ncol=200, nrow=200, byrow = TRUE)
+
+# Echelle de couleurs commune pour intensité obs. et moy. prédite
+intensity_max <- ceiling(max(max(densi), max(lambda_alt_spde_voam_df$mean)))
+col_fixe <- colourmap(hcl.colors(intensity_max), breaks=0:intensity_max)
+
+# Plot
+plot(densi, main="Intensité observée", col=col_fixe)
+plot(im(mat_int, xcol=seq(ncol(mat_int)), yrow=seq(nrow(mat_int))), main="Intensité moy. prédite", col=col_fixe)
+plot(im(mat_eca, xcol=seq(ncol(mat_eca)), yrow=seq(nrow(mat_eca))), main="Ecart-type") 
+post.range = spde.posterior(fit_alt_spde, name="field", what="range"); plot(post.range)
+post.matcorr = spde.posterior(fit_alt_spde, name="field",what="matern.correlation"); plot(post.matcorr)
+```
+
+
+### Eperua falcata
+
+```{r}
+
+# Choix de l'espèce et du genre 
+genre = "Eperua"
+espece = "falcata"
+
+# Préparation des données
+epfa = preparation(data.frame(x = p16$X[p16$Genus==genre&p16$Species==espece]/100, y = p16$Y[p16$Genus==genre&p16$Species==espece]/100))
+
+
+
+# Altitude seule 
+fit_alt_epfa = lgcp(coordinates ~ alti(map = fct_alt(x,y), model = "linear") + Intercept, data = epfa$coord_pts, samplers = bnd)
+lambda_alt_epfa <- predict(fit_alt_epfa, pix, ~ exp(alti + Intercept))
+
+# Champ SPDE seul
+model_matern = inla.spde2.pcmatern(epfa$mesh, prior.sigma = c(0.1, 0.01), prior.range = c(5, 0.01))
+fit_spde_epfa = lgcp(coordinates ~ field(map = coordinates, model = model_matern) + Intercept, data = epfa$coord_pts, samplers = bnd)
+lambda_spde_epfa <- predict(fit_spde_epfa, pix, ~ exp(field + Intercept))
+
+# Altitude + champ SPDE
+model_matern = inla.spde2.pcmatern(epfa$mesh, prior.sigma = c(0.1, 0.01), prior.range = c(5, 0.01))
+fit_alt_spde_epfa = lgcp(coordinates ~  field(map = coordinates, model = model_matern) + alti(map = fct_alt(x,y), model = "linear") + Intercept, data = epfa$coord_pts, samplers = bnd)
+lambda_alt_spde_epfa <- predict(fit_alt_spde_epfa, pix, ~ exp(field + alti + Intercept))
+lambda_alt_spde_df_epfa = as.data.frame(lambda_alt_spde_epfa)
+
+
+# Plot
+
+# Semis de points
+ggplot() + gg(epfa$coord_pts) + gg(bnd) + coord_fixed()
+
+# Points avec altitude
+abc = data.frame(a=p16$X[p16$Genus==genre&p16$Species==espece]/100,b=p16$Y[p16$Genus==genre&p16$Species==espece]/100,c=p16$altitude[p16$Genus==genre&p16$Species==espece])
+ggplot(abc, aes(x=a, y=b)) + geom_point(aes(color = c)) + scale_color_viridis(option="D") + coord_fixed() + ggtitle(paste(genre, espece))
+
+# Intensité moyenne prédite des 3 modèles
+max_epfa = max(max(lambda_alt_epfa$mean),max(lambda_spde_epfa$mean),max(lambda_alt_spde_epfa$mean))  # max. échelle de couleurs
+ggplot() + gg(lambda_alt_epfa) + gg(bnd) + gg(epfa$coord_pts, shape="+") + coord_equal() + ggtitle("Altitude") + colsc(max_epfa)
+ggplot() + gg(lambda_spde_epfa) + gg(bnd) + gg(epfa$coord_pts, shape="+") + coord_equal() + ggtitle("SPDE") + colsc(max_epfa)
+ggplot() + gg(lambda_alt_spde_epfa) + gg(bnd) + gg(epfa$coord_pts, shape="+") + coord_equal() + ggtitle("Altitude + SPDE") + colsc(max_epfa)
+
+
+# Critères DIC et WAIC
+
+scores <- data.frame(
+  dic=c(alt = fit_alt_epfa$waic$waic, spde = fit_spde_epfa$waic$waic, alt_spde = fit_alt_spde_epfa$waic$waic),
+  waic=c(alt = fit_alt_epfa$dic$dic, spde = fit_spde_epfa$dic$dic, alt_spde = fit_alt_spde_epfa$dic$dic))
+rownames(scores) <- c("altitude", "field", "altitude + field")
+scores
+
+#summary(fit_spde_epfa)
+#summary(fit_alt_epfa)
+#summary(fit_alt_spde_epfa)
+
+```
+
+Etude approfondie du modèle field + altitude dans le cas de Eperua falcata :
+```{r}
+# Intensité observée avec density
+densi = density(epfa$coord_pts_ppp, sigma = bw.diggle(epfa$coord_pts_ppp)) 
+densi$v[densi$v<0]=0
+
+
+# Intensité moyenne prédite
+mat_int = matrix(lambda_alt_spde_df_epfa$mean, ncol=200, nrow=200, byrow = TRUE)
+
+# Ecart-type de la prédiction
+mat_eca = matrix(lambda_alt_spde_df_epfa$sd, ncol=200, nrow=200, byrow = TRUE)    
+
+
+# Echelle de couleurs commune pour l'intensité obs. et moy. prédite
+intensity_max <- ceiling(max(max(densi), max(lambda_alt_spde_df_epfa$mean)))
+col_fixe <- colourmap(hcl.colors(intensity_max), breaks=0:intensity_max)
+
+# Plot
+plot(densi, main="Intensité observée", col=col_fixe)
+plot(im(mat_int, xcol=seq(ncol(mat_int)), yrow=seq(nrow(mat_int))), main="Intensité moy. prédite", col=col_fixe)
+plot(im(mat_eca, xcol=seq(ncol(mat_eca)), yrow=seq(nrow(mat_eca))), main="Ecart-type") 
+post.range = spde.posterior(fit_alt_spde_epfa, name="field", what="range"); plot(post.range)
+post.matcorr = spde.posterior(fit_alt_spde_epfa, name="field",what="matern.correlation"); plot(post.matcorr)
+```
+
+
+
+### Oenocarpus bataua
+
+```{r}
+
+# Choix de l'espèce et du genre 
+genre = "Oenocarpus" 
+espece = "bataua"
+
+# Préparation des données
+oeba = preparation(data.frame(x = p16$X[p16$Genus==genre&p16$Species==espece]/100, y = p16$Y[p16$Genus==genre&p16$Species==espece]/100))
+
+
+
+# Altitude seule 
+fit_alt_oeba = lgcp(coordinates ~ alti(map = fct_alt(x,y), model = "linear") + Intercept, data = oeba$coord_pts, samplers = bnd)
+lambda_alt_oeba <- predict(fit_alt_oeba, pix, ~ exp(alti + Intercept))
+
+# Champ SPDE seul
+model_matern = inla.spde2.pcmatern(oeba$mesh, prior.sigma = c(0.1, 0.01), prior.range = c(5, 0.01))
+fit_spde_oeba = lgcp(coordinates ~ field(map = coordinates, model = model_matern) + Intercept, data = oeba$coord_pts, samplers = bnd)
+lambda_spde_oeba <- predict(fit_spde_oeba, pix, ~ exp(field + Intercept))
+
+# Altitude + champ SPDE
+model_matern = inla.spde2.pcmatern(oeba$mesh, prior.sigma = c(0.1, 0.01), prior.range = c(5, 0.01))
+fit_alt_spde_oeba = lgcp(coordinates ~  field(map = coordinates, model = model_matern) + alti(map = fct_alt(x,y), model = "linear") + Intercept, data = oeba$coord_pts, samplers = bnd)
+lambda_alt_spde_oeba <- predict(fit_alt_spde_oeba, pix, ~ exp(field + alti + Intercept))
+lambda_alt_spde_df_oeba = as.data.frame(lambda_alt_spde_oeba)
+
+
+
+
+# Plot
+
+# Semis de points
+ggplot() + gg(oeba$coord_pts) + gg(bnd) + coord_fixed()
+
+# Points avec altitude
+abc = data.frame(a=p16$X[p16$Genus==genre&p16$Species==espece]/100,b=p16$Y[p16$Genus==genre&p16$Species==espece]/100,c=p16$altitude[p16$Genus==genre&p16$Species==espece])
+ggplot(abc, aes(x=a, y=b)) + geom_point(aes(color = c)) + scale_color_viridis(option="D") + coord_fixed() + ggtitle(paste(genre, espece))
+
+# Intensité moyenne prédite des 3 modèles
+max_oeba = max(max(lambda_alt_oeba$mean),max(lambda_spde_oeba$mean),max(lambda_alt_spde_oeba$mean)) # max. échelle de couleurs
+ggplot() + gg(lambda_alt_oeba) + gg(bnd) + gg(oeba$coord_pts, shape="+") + coord_equal() + ggtitle("Altitude") + colsc(max_oeba)
+ggplot() + gg(lambda_spde_oeba) + gg(bnd) + gg(oeba$coord_pts, shape="+") + coord_equal() + ggtitle("SPDE") + colsc(max_oeba)
+ggplot() + gg(lambda_alt_spde_oeba) + gg(bnd) + gg(oeba$coord_pts, shape="+") + coord_equal() + ggtitle("Altitude + SPDE") + colsc(max_oeba)
+
+
+# Critères DIC et WAIC
+
+scores <- data.frame(
+  dic=c(alt = fit_alt_oeba$waic$waic, spde = fit_spde_oeba$waic$waic, alt_spde = fit_alt_spde_oeba$waic$waic),
+  waic=c(alt = fit_alt_oeba$dic$dic, spde = fit_spde_oeba$dic$dic, alt_spde = fit_alt_spde_oeba$dic$dic))
+rownames(scores) <- c("altitude", "field", "altitude + field")
+scores
+
+#summary(fit_spde_oeba)
+#summary(fit_alt_oeba)
+#summary(fit_alt_spde_oeba)
+```
+
+Etude approfondie du modèle field + altitude dans le cas de Oenocarpus bataua : 
+```{r}
+# Intensité observée avec density
+densi = density(oeba$coord_pts_ppp, sigma = bw.diggle(oeba$coord_pts_ppp)) 
+densi$v[densi$v<0]=0
+
+# Intensité moyenne prédite
+mat_int = matrix(lambda_alt_spde_df_oeba$mean, ncol=200, nrow=200, byrow = TRUE)
+
+# Ecart-type de la prédiction
+mat_eca = matrix(lambda_alt_spde_df_oeba$sd, ncol=200, nrow=200, byrow = TRUE)     
+
+
+
+# Echelle de couleurs commune pour l'intensité obs. et moy. prédite
+intensity_max <- ceiling(max(max(densi), max(lambda_alt_spde_df_oeba$mean)))
+col_fixe <- colourmap(hcl.colors(intensity_max), breaks=0:intensity_max)
+
+# Plot
+plot(densi, main="Intensité observée", col=col_fixe)
+plot(im(mat_int, xcol=seq(ncol(mat_int)), yrow=seq(nrow(mat_int))), main="Intensité moy. prédite", col=col_fixe)
+plot(im(mat_eca, xcol=seq(ncol(mat_eca)), yrow=seq(nrow(mat_eca))), main="Ecart-type")
+post.range = spde.posterior(fit_alt_spde_oeba, name="field", what="range"); plot(post.range)
+post.matcorr = spde.posterior(fit_alt_spde_oeba, name="field",what="matern.correlation"); plot(post.matcorr)
+```
+
+
+
+
+# Etude de l'interaction inter-spécifique avec une méthode non-paramétrique
+
+Comme expliqué dans le rapport, la méthode INLA-SPDE ne permet pas d'étudier les interactions entre les espèces sur la parcelle. Des outils non-paramètriques plus classiques nous donne un aperçu de ce phénomène.
+
+## Qualea rosea et Vouacapoua americana : deux espèces qui se repoussent.
+
+```{r}
+# Préparation des deux espèces
+
+genre = "Qualea"
+espece = "rosea"
+quro_grd = preparation(data.frame(x = p16$X[p16$Genus==genre&p16$Species==espece], y = p16$Y[p16$Genus==genre&p16$Species==espece]), size=500)
+
+genre = "Vouacapoua"
+espece = "americana"
+voam_grd = preparation(data.frame(x = p16$X[p16$Genus==genre&p16$Species==espece], y = p16$Y[p16$Genus==genre&p16$Species==espece]), size=500)
+
+
+# Graphique des deux espèces
+
+doubleplot = data.frame( rbind(quro_grd$df,voam_grd$df) , Espece = c(rep("Qualea rosea",quro_grd$nb_obs),rep("Vouacapoua americana",voam_grd$nb_obs)) )
+ggplot(doubleplot, aes(x=x, y=y)) + geom_point(aes(color = Espece)) + coord_fixed() 
+
+
+
+# Calcul de la fonction M
+
+X = c(voam_grd$df[,1],quro_grd$df[,1])
+Y = c(voam_grd$df[,2],quro_grd$df[,2])
+PointType <- c(rep("V. Americana", voam_grd$nb_obs), rep("Q. Rosea", quro_grd$nb_obs))
+PointWeight <- rep(1,voam_grd$nb_obs+quro_grd$nb_obs)
+pattern <- wmppp(data.frame(X, Y, PointType, PointWeight), owin(xrange=c(0,500), yrange=c(0,500)))
+
+
+result_M = Mhat(X=pattern, ReferenceType="V. Americana", NeighborType="Q. Rosea")
+plot(result_M$r, result_M$M, type = "l", ylim=c(0.15,1), xlab="r", ylab="M(r)")
+lines(result_M$r, result_M$theo, type = "l", col = "red", lty=2)
+legend(x=250, y=0.32, legend=c("M indépendant", "M observé"), col=c("red", "black"), lty=c(2,1))
+```
+
+
+
+
+
+
+# Problèmes d'implémentation de la fonction lgcp
+
+Comme détaillé dans le rapport, la fonction lgcp présente une incohérence dans son implémentation. Afin de mettre celle-ci en évidence, nous testons la fonction sur des processus bien pensés.
+
+## Cas homogène
+
+
+```{r}
+# Processus n°1 : Poisson homogène (lambda=20) sur la moitié du domaine
+poish_moitie = rpoispp(lambda = 20, win = owin(xrange=c(0,2.5), yrange=c(0,5)))
+processus_1 = preparation(data.frame(x=poish_moitie$x, y= poish_moitie$y))
+
+# Processus n°2 : processus n°1 auquel on a rajouté deux points aux deux coins opposés du carré (de coord. (5,0) et (5,5)). 
+poish_moitie_deux_coins = data.frame(x = c(processus_1$df$x, 5, 5), y= c(processus_1$df$y, 0, 5))
+processus_2 = preparation(data.frame(x=poish_moitie_deux_coins$x, y= poish_moitie_deux_coins$y))
+
+# Processus n°3 : processus n°2 mais dont les points ne sont cette fois plus sur la frontière mais légèrement rentrés dans le domaine (de coord. (4.8,0.2) et (4.8,4.8)). 
+poish_moitie_deux_coins_bis = data.frame(x = c(processus_1$df$x, 4.8, 4.8), y= c(processus_1$df$y, 0.2, 4.8))
+processus_3 = preparation(data.frame(x=poish_moitie_deux_coins_bis$x, y= poish_moitie_deux_coins_bis$y))
+
+
+# Régression de Cox homogène
+fit_coxh1 <- lgcp(coordinates ~ Intercept, data = processus_1$coord_pts, samplers = bnd)
+fit_coxh2 <- lgcp(coordinates ~ Intercept, data = processus_2$coord_pts, samplers = bnd)
+fit_coxh3 <- lgcp(coordinates ~ Intercept, data = processus_2$coord_pts, samplers = bnd)
+
+# Intensités
+print(paste("Intensité observée processus n°1 = ", (processus_1$nb_obs)/25))             
+print(paste("Intensité cox homogène processus n°1 = ", exp(fit_coxh1$summary.fixed$mean)))
+print(paste("Intensité observée processus n°2 = ", (processus_2$nb_obs)/25))             
+print(paste("Intensité cox homogène processus n°2 = ", exp(fit_coxh2$summary.fixed$mean)))
+print(paste("Intensité observée processus n°3 = ", (processus_3$nb_obs+2)/25))             
+print(paste("Intensité cox homogène processus n°3 = ", exp(fit_coxh3$summary.fixed$mean)))
+
+# Plot
+ggplot() + gg(processus_1$coord_pts) + gg(bnd) + coord_fixed()
+ggplot() + gg(processus_2$coord_pts) + gg(bnd) + coord_fixed()
+ggplot() + gg(processus_3$coord_pts) + gg(bnd) + coord_fixed()
+```
+L'intensité cox homogène processus n°1 est généralement légèrement inférieure à 20 (intensité du poisson sur la moitié gauche du domaine) : la fonction ne semble pas prendre en considération les zones vides du domaine.
+
+
+
+
+## Cas non-homogène
+
+```{r}
+
+# Régression de Cox non-homogène processus n°1
+model_matern = inla.spde2.pcmatern(processus_1$mesh, prior.sigma = c(0.1, 0.01), prior.range = c(5, 0.01))
+fit_cox1 = lgcp(coordinates ~ field(map = coordinates, model = model_matern) + Intercept, data = processus_1$coord_pts, samplers = bnd)
+lambda_cox1 <- predict(fit_cox1, pix, ~ exp(field + Intercept))
+
+# Régression de Cox non-homogène processus n°2
+model_matern = inla.spde2.pcmatern(processus_2$mesh, prior.sigma = c(0.1, 0.01), prior.range = c(5, 0.01))
+fit_cox2 = lgcp(coordinates ~ field(map = coordinates, model = model_matern) + Intercept, data = processus_2$coord_pts, samplers = bnd)
+lambda_cox2 <- predict(fit_cox2, pix, ~ exp(field + Intercept))
+
+# Régression de Cox non-homogène processus n°3
+model_matern = inla.spde2.pcmatern(processus_3$mesh, prior.sigma = c(0.1, 0.01), prior.range = c(5, 0.01))
+fit_cox3 = lgcp(coordinates ~ field(map = coordinates, model = model_matern) + Intercept, data = processus_3$coord_pts, samplers = bnd)
+lambda_cox3 <- predict(fit_cox3, pix, ~ exp(field + Intercept))
+
+
+# Plot
+plot(lambda_cox1)
+plot(lambda_cox2)
+plot(lambda_cox3)
+```
+
+
+Le problème d'implémentation n'impacte cependant pas la régression lorsque celle-ci est non-homogène.
+
