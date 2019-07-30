@@ -473,8 +473,8 @@ ggplot() + gg(lambda_alt_spde_voam) + gg(bnd) + gg(voam$coord_pts, shape="+") + 
 # Critères WAIC et DIC
 
 scores <- data.frame(
-  dic=c(alt = fit_alt$waic$waic, spde = fit_spde$waic$waic, alt_spde = fit_alt_spde$waic$waic),
-  waic=c(alt = fit_alt$dic$dic, spde = fit_spde$dic$dic, alt_spde = fit_alt_spde$dic$dic))
+  dic=c(alt = fit_alt_voam$waic$waic, spde = fit_spde_voam$waic$waic, alt_spde = fit_alt_spde_voam$waic$waic),
+  waic=c(alt = fit_alt_voam$dic$dic, spde = fit_spde_voam$dic$dic, alt_spde = fit_alt_spde_voam$dic$dic))
 rownames(scores) <- c("altitude", "field", "altitude + field")
 scores
 
